@@ -15,7 +15,7 @@ general: {
 											# to stdout or not (default=true)
 	#log_to_file = "/path/to/janus.log"		# Whether to use a log file or not
 	debug_level = 4							# Debug/logging level, valid values are 0-7
-	#debug_timestamps = true				# Whether to show a timestamp for each log line
+	debug_timestamps = true					# Whether to show a timestamp for each log line
 	#debug_colors = false					# Whether colors should be disabled in the log
 	#debug_locks = true						# Whether to enable debugging of locks (very verbose!)
 
@@ -125,6 +125,8 @@ general: {
 # connectivity, for the time being, at least until Identity Providers
 # are standardized and implemented in browsers.
 certificates: {
+	cert_pem = "/opt/janus/cert/STAR.kollus.com_crt.pem"
+	cert_key = "/opt/janus/cert/STAR.kollus.com_key.pem"
 	#cert_pem = "/path/to/certificate.pem"
 	#cert_key = "/path/to/key.pem"
 	#cert_pwd = "secretpassphrase"
@@ -147,7 +149,7 @@ certificates: {
 # times, but may not work in case the RTT of the user is high: as such,
 # you should pick a reasonable trade-off (usually 2*max expected RTT).
 media: {
-	#ipv6 = true
+	ipv6 = true
 	#max_nack_queue = 500
 	#rtp_port_range = "20000-40000"
 	#dtls_mtu = 1200
@@ -174,10 +176,12 @@ media: {
 # be used for gathering candidates, and enable or disable the
 # internal libnice debugging, if needed.
 nat: {
+	stun_server = "stun.l.google.com"
+	stun_port = 19302
 	#stun_server = "stun.voip.eutelia.it"
 	#stun_port = 3478
-	nice_debug = false
-	#full_trickle = true
+	#nice_debug = false
+	full_trickle = true
 	#ice_lite = true
 	#ice_tcp = true
 
@@ -195,6 +199,13 @@ nat: {
 	# statically configured TURN server, and thus provide the address of the
 	# TURN server, the transport (udp/tcp/tls) to use, and a set of valid
 	# credentials to authenticate...
+	
+	turn_server = "183.111.198.229"
+	turn_port = 3478
+	turn_type = "udp"
+	turn_user = "kollus"
+	turn_pwd = "0catenoid"
+	
 	#turn_server = "myturnserver.com"
 	#turn_port = 3478
 	#turn_type = "udp"
@@ -242,7 +253,7 @@ nat: {
 	# Just beware that the ICE ignore list is not used if an enforce list
 	# has been configured. By default, Janus ignores all interfaces whose
 	# name starts with 'vmnet', to skip VMware interfaces:
-	ice_ignore_list = "vmnet"
+	ice_ignore_list = "vmnet, 172.16."
 
 	# In case you want to allow Janus to start even if the configured STUN or TURN
 	# server is unreachable, you can set 'ignore_unreachable_ice_server' to true.

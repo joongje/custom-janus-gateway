@@ -146,6 +146,83 @@ file-ondemand-sample: {
 	#videofmtp = "profile-level-id=42e01f;packetization-mode=1"
 #}
 
+
+h264-sample: {
+    type = "rtp"
+    id = 10
+    description = "H.264 live stream coming from gstreamer"
+    audio = true
+    video = true
+    audioport = 8002
+    audiopt = 111
+    audiortpmap = "opus/48000/2"
+    videoport = 8004
+    videopt = 96
+    #videortpmap = "VP8/90000"
+    videortpmap = "H264/90000"
+    videofmtp = "profile-level-id=42e01f;packetization-mode=1"
+    data = true
+    dataport = 8006
+    #threads = 4
+}
+
+
+h264-sample2: {
+    type = "rtp"
+    id = 11
+    description = "H.264 live stream coming from gstreamer"
+    audio = true
+    video = true
+    audioport = 8008
+    audiopt = 111
+    audiortpmap = "opus/48000/2"
+    videoport = 8010
+    videopt = 96
+    #videortpmap = "VP8/90000"
+    videortpmap = "VP8/90000"
+    videofmtp = "profile-level-id=42e01f;packetization-mode=1"
+    data = true
+    dataport = 8012
+}
+
+
+h264-sample3: {
+    type = "rtp"
+    id = 12
+    description = "H.264 live stream coming from gstreamer"
+    audio = true
+    video = true
+    audioport = 8014
+    audiopt = 111
+    audiortpmap = "opus/48000/2"
+    videoport = 8016
+    videopt = 96
+    #videortpmap = "VP8/90000"
+    videortpmap = "VP8/90000"
+    videofmtp = "profile-level-id=42e01f;packetization-mode=1"
+    data = true
+    dataport = 8018
+}
+
+h264-sample4: {
+    type = "rtp"
+    id = 13
+    description = "rtmp to rtp module test"
+    audio = true
+    video = true
+    audioport = 8020
+    audiopt = 111
+    audiortpmap = "opus/48000/2"
+    videoport = 8022
+    videopt = 96
+    videortpmap = "H264/90000"
+    videofmtp = "profile-level-id=42e01f;packetization-mode=1"
+    videosimulcast = true
+    videoport2 = 8024
+    videoport3 = 8026
+}
+
+
 #
 # The Streaming plugin also supports the broadcasting of datachannel
 # messages, either by themselves or along other audio/video streams (e.g.,
