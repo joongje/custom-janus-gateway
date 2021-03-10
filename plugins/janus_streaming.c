@@ -706,7 +706,6 @@ rtspiface = network interface IP address or device name to listen on when receiv
 #include "../utils.h"
 #include "../ip-utils.h"
 
-
 /* Plugin information */
 #define JANUS_STREAMING_VERSION			8
 #define JANUS_STREAMING_VERSION_STRING	"0.0.8"
@@ -974,7 +973,7 @@ typedef enum janus_streaming_source {
 typedef struct janus_streaming_rtp_keyframe {
 	gboolean enabled;
 	/* If enabled, we store the packets of the last keyframe, to immediately send them for new viewers */
-	GList *latest_keyframe;
+	GList *latest_keyframe;		// kimi... key frame rtp packet list
 	/* This is where we store packets while we're still collecting the whole keyframe */
 	GList *temp_keyframe;
 	guint32 temp_ts;
@@ -1117,13 +1116,21 @@ typedef struct janus_streaming_mountpoint {
 	GDestroyNotify source_destroy;
 	janus_streaming_codecs codecs;
 	gboolean audio, video, data;
-	GList *viewers;
+	GList *viewers;			// kimi.... viewers°¡ janus_streaming_session ÀÓ..
 	int helper_threads;		/* Only relevant for RTP mountpoints */
 	GList *threads;			/* Only relevant for RTP mountpoints */
 	volatile gint destroyed;
 	janus_mutex mutex;
 	janus_refcount ref;
+
+
+	/////////////////////////////////////////////////////////////////////
+	// add kimi.... if sumulcast then check video resolution bitrate
+	gboolean _is_simulcast_threshold_bitrate_setting;
+	uint32_t _simaulcast_threshold_bitrate[3];		// L(0), M(1), H(2)
+	/////////////////////////////////////////////////////////////////////
 } janus_streaming_mountpoint;
+
 GHashTable *mountpoints = NULL, *mountpoints_temp = NULL;
 janus_mutex mountpoints_mutex;
 static char *admin_key = NULL;
@@ -1187,8 +1194,8 @@ typedef enum simulcast_abr_state {
 #define __SIMULCAST_ABR_GOOGLE_CC_SLOW_START_MAX_THRESHOLD__			40		// fix
 #define __SIMULCAST_ABR_STREAM_CHANGED_WAITING__						70		// thinking... 60 : so so
 
-#define __SIMULCAST_ABR_180P_THRESHOLD__								600000		// 700000 -> 600000		fix
-#define __SIMULCAST_ABR_360P_THRESHOLD__								1400000		// 1400000 -> 1300000	fix
+//#define __SIMULCAST_ABR_180P_THRESHOLD__								600000		// 700000 -> 600000		fix
+//#define __SIMULCAST_ABR_360P_THRESHOLD__								1400000		// 1400000 -> 1300000	fix
 
 typedef struct simulcast_abr_state_context {
 	simulcast_abr_state _state;
@@ -4018,7 +4025,7 @@ void janus_streaming_incoming_rtcp(janus_plugin_session *handle, int video, char
 	/////////////////////////////////////////////////////////////
 	// add kimi TODO... for remb proc.... temp disable
 	if(video) {
-		if(source->simulcast) {
+		if (source->simulcast && mp->_is_simulcast_threshold_bitrate_setting) {
 			uint64_t bw = janus_rtcp_get_remb(buf, len);
 			uint64_t orign_bw = bw;	// for debuging
 			if(bw > 0) {
@@ -4049,7 +4056,11 @@ void janus_streaming_incoming_rtcp(janus_plugin_session *handle, int video, char
 											if(session->_simulcast_abr_ctx._slow_start_overcome_count < 3)
 												session->_simulcast_abr_ctx._slow_start_overcome_count++;
 
-											bw += session->_simulcast_abr_ctx._hold_state_count * __SIMULCAST_ABR_GOOGLE_CC_SLOW_START_WEIGHT__;	
+											uint32_t weight = __SIMULCAST_ABR_GOOGLE_CC_SLOW_START_WEIGHT__;
+											if (mp->_simaulcast_threshold_bitrate[0] > 1000000)
+												weight = weight * 2;
+
+											bw += session->_simulcast_abr_ctx._hold_state_count * weight;	
 										}
 									}
 								}
@@ -4061,27 +4072,27 @@ void janus_streaming_incoming_rtcp(janus_plugin_session *handle, int video, char
 							}
 						}
 
-						if(substream == 0) {	// 180p
-							if(bw >= __SIMULCAST_ABR_180P_THRESHOLD__ && bw < __SIMULCAST_ABR_360P_THRESHOLD__) {
+						if(substream == 0) {	// LOW
+							if (bw >= mp->_simaulcast_threshold_bitrate[0] && bw < mp->_simaulcast_threshold_bitrate[1]) {
 								session->sim_context.substream_target = 1;
 								bchange = TRUE;
-							} else if(bw >= __SIMULCAST_ABR_360P_THRESHOLD__) {
+							} else if(bw >= mp->_simaulcast_threshold_bitrate[1]) {
 								session->sim_context.substream_target = 2;
 								bchange = TRUE;
 							}
-						} else if(substream == 1) {
-							if(bw < __SIMULCAST_ABR_180P_THRESHOLD__) {
+						} else if(substream == 1) {	// middle
+							if (bw < mp->_simaulcast_threshold_bitrate[0]) {
 								session->sim_context.substream_target = 0;
 								bchange = TRUE;
-							} else if(bw >= __SIMULCAST_ABR_360P_THRESHOLD__) {
+							} else if (bw >= mp->_simaulcast_threshold_bitrate[1]) {
 								session->sim_context.substream_target = 2;
 								bchange = TRUE;
 							}
-						} else {
-							if(bw < __SIMULCAST_ABR_360P_THRESHOLD__ && bw >= __SIMULCAST_ABR_180P_THRESHOLD__) {
+						} else {	// high
+							if (bw >= mp->_simaulcast_threshold_bitrate[0] && bw < mp->_simaulcast_threshold_bitrate[1]) {
 								session->sim_context.substream_target = 1;
 								bchange = TRUE;
-							} else if(bw < __SIMULCAST_ABR_180P_THRESHOLD__) {
+							} else if (bw < mp->_simaulcast_threshold_bitrate[0]) {
 								session->sim_context.substream_target = 0;
 								bchange = TRUE;
 							}
@@ -6716,6 +6727,177 @@ static void *janus_streaming_filesource_thread(void *data) {
 	return NULL;
 }
 
+///////////////////////////////////////////////////////////////////////////////////////
+// add kimi...
+static uint32_t _thresold_bitrate(int32_t width, int32_t height) {
+	// TODO...
+	uint32_t max_bitrate;
+	if (width*height <= 320 * 180) {
+		max_bitrate = 600;
+	}
+	else if (width * height <= 640 * 360) {
+		max_bitrate = 1400;
+	}
+	else if (width * height <= 1280 * 720) {
+		max_bitrate = 2500;
+	}
+	else {
+		max_bitrate = 3000;
+	}
+
+	return max_bitrate * 1000;
+}
+
+// rename janus_pp_h264_eg_getbit => janus_h264_eg_getbit_impl in pp-h264.c
+static uint32_t janus_h264_eg_getbit_impl(uint8_t *base, uint32_t offset) {
+	return ((*(base + (offset >> 0x3))) >> (0x7 - (offset & 0x7))) & 0x1;
+}
+
+// rename janus_pp_h264_eg_decode => janus_h264_eg_decode_impl in pp-h264.c
+static uint32_t janus_h264_eg_decode_impl(uint8_t *base, uint32_t *offset) {
+	uint32_t zeros = 0;
+	while (janus_h264_eg_getbit_impl(base, (*offset)++) == 0)
+		zeros++;
+	uint32_t res = 1 << zeros;
+	int32_t i = 0;
+	for (i = zeros - 1; i >= 0; i--) {
+		res |= janus_h264_eg_getbit_impl(base, (*offset)++) << i;
+	}
+	return res - 1;
+}
+
+// rename janus_pp_h264_parse_sps => janus_h264_parse_sps_impl  in pp-h264.c 
+static void janus_h264_parse_sps_impl(char *buffer, int *width, int *height) { 
+	/* Let's check if it's the right profile, first */
+	int index = 1;
+	int profile_idc = *(buffer + index);
+	if (profile_idc != 66) {
+		JANUS_LOG(LOG_WARN, "Profile is not baseline (%d != 66)\n", profile_idc);
+	}
+	/* Then let's skip 2 bytes and evaluate/skip the rest */
+	index += 3;
+	uint32_t offset = 0;
+	uint8_t *base = (uint8_t *)(buffer + index);
+	/* Skip seq_parameter_set_id */
+	janus_h264_eg_decode_impl(base, &offset);
+	if (profile_idc >= 100) {
+		/* Skip chroma_format_idc */
+		janus_h264_eg_decode_impl(base, &offset);
+		/* Skip bit_depth_luma_minus8 */
+		janus_h264_eg_decode_impl(base, &offset);
+		/* Skip bit_depth_chroma_minus8 */
+		janus_h264_eg_decode_impl(base, &offset);
+		/* Skip qpprime_y_zero_transform_bypass_flag */
+		janus_h264_eg_getbit_impl(base, offset++);
+		/* Skip seq_scaling_matrix_present_flag */
+		janus_h264_eg_getbit_impl(base, offset++);
+	}
+	/* Skip log2_max_frame_num_minus4 */
+	janus_h264_eg_decode_impl(base, &offset);
+	/* Evaluate pic_order_cnt_type */
+	int pic_order_cnt_type = janus_h264_eg_decode_impl(base, &offset);
+	if (pic_order_cnt_type == 0) {
+		/* Skip log2_max_pic_order_cnt_lsb_minus4 */
+		janus_h264_eg_decode_impl(base, &offset);
+	}
+	else if (pic_order_cnt_type == 1) {
+		/* Skip delta_pic_order_always_zero_flag, offset_for_non_ref_pic,
+		* offset_for_top_to_bottom_field and num_ref_frames_in_pic_order_cnt_cycle */
+		janus_h264_eg_getbit_impl(base, offset++);
+		janus_h264_eg_decode_impl(base, &offset);
+		janus_h264_eg_decode_impl(base, &offset);
+		int num_ref_frames_in_pic_order_cnt_cycle = janus_h264_eg_decode_impl(base, &offset);
+		int i = 0;
+		for (i = 0; i<num_ref_frames_in_pic_order_cnt_cycle; i++) {
+			janus_h264_eg_decode_impl(base, &offset);
+		}
+	}
+	/* Skip max_num_ref_frames and gaps_in_frame_num_value_allowed_flag */
+	janus_h264_eg_decode_impl(base, &offset);
+	janus_h264_eg_getbit_impl(base, offset++);
+	/* We need the following three values */
+	int pic_width_in_mbs_minus1 = janus_h264_eg_decode_impl(base, &offset);
+	int pic_height_in_map_units_minus1 = janus_h264_eg_decode_impl(base, &offset);
+	int frame_mbs_only_flag = janus_h264_eg_getbit_impl(base, offset++);
+	if (!frame_mbs_only_flag) {
+		/* Skip mb_adaptive_frame_field_flag */
+		janus_h264_eg_getbit_impl(base, offset++);
+	}
+	/* Skip direct_8x8_inference_flag */
+	janus_h264_eg_getbit_impl(base, offset++);
+	/* We need the following value to evaluate offsets, if any */
+	int frame_cropping_flag = janus_h264_eg_getbit_impl(base, offset++);
+	int frame_crop_left_offset = 0, frame_crop_right_offset = 0,
+		frame_crop_top_offset = 0, frame_crop_bottom_offset = 0;
+	if (frame_cropping_flag) {
+		frame_crop_left_offset = janus_h264_eg_decode_impl(base, &offset);
+		frame_crop_right_offset = janus_h264_eg_decode_impl(base, &offset);
+		frame_crop_top_offset = janus_h264_eg_decode_impl(base, &offset);
+		frame_crop_bottom_offset = janus_h264_eg_decode_impl(base, &offset);
+	}
+	/* Skip vui_parameters_present_flag */
+	janus_h264_eg_getbit_impl(base, offset++);
+
+	/* We skipped what we didn't care about and got what we wanted, compute width/height */
+	if (width)
+		*width = ((pic_width_in_mbs_minus1 + 1) * 16) - frame_crop_left_offset * 2 - frame_crop_right_offset * 2;
+	if (height)
+		*height = ((2 - frame_mbs_only_flag)* (pic_height_in_map_units_minus1 + 1) * 16) - (frame_crop_top_offset * 2) - (frame_crop_bottom_offset * 2);
+}
+
+static void _check_h264_video_resolution_bitrate_in_simulcast(janus_streaming_mountpoint *mountpoint, int vidx, char *payload, int len) {
+	uint8_t fragment = *payload & 0x1F;
+	uint8_t nal = *(payload + 1) & 0x1F;
+
+	if (nal != 7 && fragment != 24)
+		return;
+
+	if (mountpoint->_simaulcast_threshold_bitrate[vidx] != 0)
+		return;
+
+	int width, height;
+	char *sps = NULL;
+	if (nal == 7) {
+		sps = (payload + 1);
+	} else if(fragment == 24) {
+		payload++;
+		len--;
+		uint16_t psize = 0;
+		while (len > 2) {
+			memcpy(&psize, payload, 2);
+			psize = ntohs(psize);
+			payload += 2;
+			len -= 2;
+			int nal = *payload & 0x1F;
+			if (nal == 7) {
+				sps = payload;
+				break;
+			}
+			payload += psize;
+			len -= psize;
+		}
+
+		if (sps == NULL)
+			return;
+	}
+	else {
+		return;
+	}
+
+	janus_h264_parse_sps_impl(sps, &width, &height);
+
+	JANUS_LOG(LOG_INFO, ">>>>>>>> _check_h264_video_resolution_bitrate_in_simulcast vidx %d width %d height %d\n", vidx, width, height);
+
+	mountpoint->_simaulcast_threshold_bitrate[vidx] = _thresold_bitrate(width, height);
+
+	if (mountpoint->_simaulcast_threshold_bitrate[0] != 0 &&
+		mountpoint->_simaulcast_threshold_bitrate[1] != 0 &&
+		mountpoint->_simaulcast_threshold_bitrate[2] != 0) {
+		mountpoint->_is_simulcast_threshold_bitrate_setting = TRUE;
+	}
+}
+//////////////////////////////////////////////////////////////////////////
+
 /* Thread to relay RTP frames coming from gstreamer/ffmpeg/others */
 static void *janus_streaming_relay_thread(void *data) {
 	JANUS_LOG(LOG_VERB, "Starting streaming relay thread\n");
@@ -6936,7 +7118,7 @@ static void *janus_streaming_relay_thread(void *data) {
 			num++;
 		}
 		/* Wait for some data */
-		resfd = poll(fds, num, 1000);
+		resfd = poll(fds, num, 1000);		// kimi... detect socket i/o
 		if(resfd < 0) {
 			if(errno == EINTR) {
 				JANUS_LOG(LOG_HUGE, "[%s] Got an EINTR (%s), ignoring...\n", name, strerror(errno));
@@ -7157,7 +7339,7 @@ static void *janus_streaming_relay_thread(void *data) {
 							/* We received the last part of the keyframe, get rid of the old one and use this from now on */
 							JANUS_LOG(LOG_HUGE, "[%s] ... ... last part of keyframe received! ts=%"SCNu32", %d packets\n",
 								name, source->keyframe.temp_ts, g_list_length(source->keyframe.temp_keyframe));
-							source->keyframe.temp_ts = 0;
+							source->keyframe.temp_ts = 0;	// kimi... reset temp key frame timestamp
 							janus_mutex_lock(&source->keyframe.mutex);
 							if(source->keyframe.latest_keyframe != NULL)
 								g_list_free_full(source->keyframe.latest_keyframe, (GDestroyNotify)janus_streaming_rtp_relay_packet_free);
@@ -7237,7 +7419,7 @@ static void *janus_streaming_relay_thread(void *data) {
 					packet.length = bytes;
 					packet.is_rtp = TRUE;
 					packet.is_video = TRUE;
-					packet.is_keyframe = FALSE;
+					packet.is_keyframe = FALSE;		// kimi ... why key frame always FALSE setting, 
 					packet.simulcast = source->simulcast;
 					packet.substream = index;
 					packet.codec = mountpoint->codecs.video_codec;
@@ -7288,30 +7470,27 @@ static void *janus_streaming_relay_thread(void *data) {
 							packet.ssrc[2] = v_last_ssrc[2];
 						}
 
-						packet.queuing_nowUs = janus_get_monotonic_time();	// add kimi
-/*						
-						// add kimi
-						{
-							if(!_bRecvCheckTS) {
-								_recvSaveTS = packet.origin_timestamp;
-								_bRecvCheckTS = TRUE;
-								prevQueuingUs = packet.queuing_nowUs;
-								firstQueuingUs = packet.queuing_nowUs;
-							} else {
-								if(_recvSaveTS != packet.origin_timestamp) {
-									JANUS_LOG(LOG_INFO, "\tkimi_outgoing janus_streaming_relay_thread polling packet origin_timestamp \t%d\t  timestamp %u first_queuingUs \t%ld\t nowUs \t%ld\t frame recv ProcUs \t%ld\n",
-										packet.origin_timestamp, packet.timestamp, firstQueuingUs, packet.queuing_nowUs, frameRecvDurationUs);
-									frameRecvDurationUs = 0;		
-									_recvSaveTS = packet.origin_timestamp;
-									prevQueuingUs = packet.queuing_nowUs;
-									firstQueuingUs = packet.queuing_nowUs;
-								} else {
-									frameRecvDurationUs += (packet.queuing_nowUs - prevQueuingUs);
-									prevQueuingUs = packet.queuing_nowUs;
+						//////////////////////////////////////////////////////////////////
+						// TODO... kimi  resolution check
+						if (source->simulcast && !mountpoint->_is_simulcast_threshold_bitrate_setting) {
+							if (mountpoint->codecs.video_codec == JANUS_VIDEOCODEC_H264) {
+								janus_rtp_header *header = (janus_rtp_header *)buffer;
+								int plen = 0;
+								char *payload = janus_rtp_payload(buffer, bytes, &plen);
+								gboolean kf = FALSE;
+								kf = janus_h264_is_keyframe(payload, plen);
+								if (kf == TRUE) {
+									_check_h264_video_resolution_bitrate_in_simulcast(mountpoint, index, payload, plen);
 								}
 							}
+							else {
+								// not support... TODO...
+							}
 						}
-*/
+						//////////////////////////////////////////////////////////////////
+
+						packet.queuing_nowUs = janus_get_monotonic_time();	// add kimi
+
 						/* Go! */
 						janus_mutex_lock(&mountpoint->mutex);
 						g_list_foreach(mountpoint->helper_threads == 0 ? mountpoint->viewers : mountpoint->threads,
@@ -7489,34 +7668,7 @@ static void janus_streaming_relay_rtp_packet(gpointer data, gpointer user_data) 
 		if(packet->is_video) {
 			if(!session->video)
 				return;
-/*
-			{	// add kimi
-				if(session->_bcheckingTS == FALSE) {
-					session->_saveTS = packet->origin_timestamp;
-					session->_bcheckingTS = TRUE;
-					session->_prevQueuingUs = packet->queuing_nowUs;
-					session->_firstQueuingUs = packet->queuing_nowUs;
-				} else {
-					if(session->_saveTS != packet->origin_timestamp) {
 
-						pid_t tid = syscall(SYS_gettid);			
-						gint64 nowUs = janus_get_monotonic_time();
-						JANUS_LOG(LOG_INFO, 
-						"\tkimi_outgoing janus_streaming_relay_rtp_packet sesson %p thread id %d origin_timestamp \t%u\t timestamp %u pop_packet firstqueuingUs \t%ld\t nowUs \t%ld\t duration \t%ld\n",
-						session, tid, packet->origin_timestamp, packet->timestamp, session->_firstQueuingUs, nowUs, session->_frameProcUs);
-
-						session->_frameProcUs = 0;
-						session->_saveTS = packet->origin_timestamp;
-						session->_prevQueuingUs = packet->queuing_nowUs;
-						session->_firstQueuingUs = packet->queuing_nowUs;
-					} else {
-						gint64 nowUs = janus_get_monotonic_time();
-						session->_frameProcUs += nowUs - session->_prevQueuingUs;
-						session->_prevQueuingUs = nowUs;
-					}
-				}
-			}
-*/
 			/* Check if there's any SVC info to take into account */
 			if(packet->svc) {
 				/* There is: check if this is a layer that can be dropped for this viewer

@@ -22,5 +22,4 @@ int janus_pp_h264_preprocess(FILE *file, janus_pp_frame_packet *list);
 int janus_pp_h264_process(FILE *file, janus_pp_frame_packet *list, int *working);
 void janus_pp_h264_close(void);
 
-
 #endif

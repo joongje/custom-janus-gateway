@@ -694,8 +694,9 @@ gboolean janus_h264_is_keyframe(const char *buffer, int len) {
 	/* Parse H264 header now */
 	uint8_t fragment = *buffer & 0x1F;
 	uint8_t nal = *(buffer+1) & 0x1F;
+
 	if(fragment == 7 || ((fragment == 28 || fragment == 29) && nal == 7)) {
-		JANUS_LOG(LOG_HUGE, "Got an H264 key frame\n");
+		JANUS_LOG(LOG_HUGE, "Got an H264 key frame\n");			// kimi orign LOG_HUGE
 		return TRUE;
 	} else if(fragment == 24) {
 		/* May we find an SPS in this STAP-A? */
@@ -710,7 +711,7 @@ gboolean janus_h264_is_keyframe(const char *buffer, int len) {
 			len -= 2;
 			int nal = *buffer & 0x1F;
 			if(nal == 7) {
-				JANUS_LOG(LOG_HUGE, "Got an SPS/PPS\n");
+				JANUS_LOG(LOG_HUGE, "Got an SPS/PPS\n");		// kimi orign LOG_HUGE
 				return TRUE;
 			}
 			buffer += psize;
