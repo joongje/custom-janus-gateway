@@ -4134,7 +4134,7 @@ void janus_streaming_incoming_rtcp(janus_plugin_session *handle, int video, char
 	// add kimi TODO... for remb proc.... temp disable
 	if(video) {
 		if (source->simulcast && mp->_is_simulcast_threshold_bitrate_setting) {
-//			_janus_streaming_simulcast_video_remb_proc(session, mp, source, buf, len);		// disable  for testing
+			_janus_streaming_simulcast_video_remb_proc(session, mp, source, buf, len);		// disable  for testing
 		}
 	}
 	/////////////////////////////////////////////////////////////
