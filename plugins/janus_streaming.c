@@ -1188,11 +1188,11 @@ typedef enum simulcast_abr_state {
 	_REMB_BITRATE_DECREASE_STATE = 2
 } simulcast_abr_state;
 
-#define __SIMULCAST_ABR_BITRATE_TOLERANCE__								10000			// fix
-#define __SIMULCAST_ABR_GOOGLE_CC_SLOW_START_WEIGHT__					30000	// 10000 -> 20000 -> 25000 -> 15000 -> 25000->20000  (60000 50)		... thinking.... fix
+#define __SIMULCAST_ABR_BITRATE_TOLERANCE__								30000			// fix 10000 -> 30000
+#define __SIMULCAST_ABR_GOOGLE_CC_SLOW_START_WEIGHT__					30000	// 10000 -> 20000 -> 25000 -> 15000 -> 25000->20000   (60000 50)		... thinking.... fix 30000, 60000
 #define __SIMULCAST_ABR_GOOGLE_CC_SLOW_START_DETECT_COUNT_THRESHOLD__	25		// 30 -> 25		fix
 #define __SIMULCAST_ABR_GOOGLE_CC_SLOW_START_MAX_THRESHOLD__			40		// fix
-#define __SIMULCAST_ABR_STREAM_CHANGED_WAITING__						70		// thinking... 60 : so so
+#define __SIMULCAST_ABR_STREAM_CHANGED_WAITING_MAX_COUNT__				70		// thinking... 60 : so so
 
 //#define __SIMULCAST_ABR_180P_THRESHOLD__								600000		// 700000 -> 600000		fix
 //#define __SIMULCAST_ABR_360P_THRESHOLD__								1400000		// 1400000 -> 1300000	fix
@@ -3990,6 +3990,114 @@ void janus_streaming_incoming_rtp(janus_plugin_session *handle, int video, char 
 	/* FIXME We don't care about what the browser sends us, we're sendonly */
 }
 
+
+//////////////////////////////////////////////////////////////////////////
+// kimi.... add
+static void _janus_streaming_simulcast_video_remb_proc(janus_streaming_session *session, janus_streaming_mountpoint *mp, janus_streaming_rtp_source *source,
+													  char *buf, int len) {
+	uint64_t bw = janus_rtcp_get_remb(buf, len);
+	uint64_t orign_bw = bw;	// for debuging
+	if (bw > 0) {
+		gboolean bchange = FALSE;
+		uint32_t substream = session->sim_context.substream;
+
+		session->_simulcast_abr_ctx._remb_bitrate = bw;
+		if (session->_simulcast_abr_ctx._prev_remb_bitrate != 0) {
+			if (!session->_simulcast_abr_ctx._stream_changed_waiting_count) {
+				if (bw < session->_simulcast_abr_ctx._prev_remb_bitrate) {
+					session->_simulcast_abr_ctx._prev_state = session->_simulcast_abr_ctx._state;
+					session->_simulcast_abr_ctx._state = _REMB_BITRATE_DECREASE_STATE;
+					session->_simulcast_abr_ctx._hold_state_count = 0;
+				}
+				else {
+					if ((bw - session->_simulcast_abr_ctx._prev_remb_bitrate) <= __SIMULCAST_ABR_BITRATE_TOLERANCE__) {
+						if (session->_simulcast_abr_ctx._state != _REMB_BITRATE_HOLD_STATE) {
+							session->_simulcast_abr_ctx._prev_state = session->_simulcast_abr_ctx._state;
+							session->_simulcast_abr_ctx._state = _REMB_BITRATE_HOLD_STATE;
+						}
+
+						if (session->_simulcast_abr_ctx._prev_state == _REMB_BITRATE_DECREASE_STATE) {
+							if (substream == 0) {
+								if (session->_simulcast_abr_ctx._hold_state_count < __SIMULCAST_ABR_GOOGLE_CC_SLOW_START_MAX_THRESHOLD__)
+									session->_simulcast_abr_ctx._hold_state_count++;
+
+								if (session->_simulcast_abr_ctx._hold_state_count >= (__SIMULCAST_ABR_GOOGLE_CC_SLOW_START_DETECT_COUNT_THRESHOLD__ - session->_simulcast_abr_ctx._slow_start_overcome_count * 5)) {
+									// detect google cc slow start...
+									if (session->_simulcast_abr_ctx._slow_start_overcome_count < 3)
+										session->_simulcast_abr_ctx._slow_start_overcome_count++;
+
+									uint32_t weight = __SIMULCAST_ABR_GOOGLE_CC_SLOW_START_WEIGHT__;
+									if (mp->_simaulcast_threshold_bitrate[0] > 1000000)
+										weight = weight * 2;
+
+									bw += session->_simulcast_abr_ctx._hold_state_count * weight;
+								}
+							}
+						}
+					}
+					else {
+						session->_simulcast_abr_ctx._prev_state = session->_simulcast_abr_ctx._state;
+						session->_simulcast_abr_ctx._state = _REMB_BITRATE_INCREASE_STATE;
+						session->_simulcast_abr_ctx._hold_state_count = 0;
+						session->_simulcast_abr_ctx._slow_start_overcome_count = 0;
+					}
+				}
+
+
+				if (substream == 0) {	// LOW
+					if (bw >= mp->_simaulcast_threshold_bitrate[0] && bw < mp->_simaulcast_threshold_bitrate[1]) {
+						session->sim_context.substream_target = 1;
+						bchange = TRUE;
+					}
+					else if (bw >= mp->_simaulcast_threshold_bitrate[1]) {
+						session->sim_context.substream_target = 2;
+						bchange = TRUE;
+					}
+				}
+				else if (substream == 1) {	// middle
+					if (bw < mp->_simaulcast_threshold_bitrate[0]) {
+						session->sim_context.substream_target = 0;
+						bchange = TRUE;
+					}
+					else if (bw >= mp->_simaulcast_threshold_bitrate[1]) {
+						session->sim_context.substream_target = 2;
+						bchange = TRUE;
+					}
+				}
+				else {	// high
+					if (bw >= mp->_simaulcast_threshold_bitrate[0] && bw < mp->_simaulcast_threshold_bitrate[1]) {
+						session->sim_context.substream_target = 1;
+						bchange = TRUE;
+					}
+					else if (bw < mp->_simaulcast_threshold_bitrate[0]) {
+						session->sim_context.substream_target = 0;
+						bchange = TRUE;
+					}
+				}
+
+				if (bchange == TRUE) {
+					session->_simulcast_abr_ctx._hold_state_count = 0;
+					if (substream == 0 && session->_simulcast_abr_ctx._slow_start_overcome_count != 0) {
+						session->_simulcast_abr_ctx._stream_changed_waiting_count = __SIMULCAST_ABR_STREAM_CHANGED_WAITING_MAX_COUNT__;
+					}
+					else {
+						session->_simulcast_abr_ctx._stream_changed_waiting_count = 5;
+					}
+				}
+			}
+			else {
+				session->_simulcast_abr_ctx._stream_changed_waiting_count--;
+			}
+		}
+
+		session->_simulcast_abr_ctx._prev_remb_bitrate = session->_simulcast_abr_ctx._remb_bitrate;
+
+		JANUS_LOG(LOG_HUGE, "kimi_remb_trace [%p] REMB for this PeerConnection: \t%"SCNu64"\t calc bw\t%"SCNu64"\t \t%"SCNu64"\t substream\t %d\n",
+			session, orign_bw, bw, janus_get_monotonic_time(), substream);
+	}
+}
+//////////////////////////////////////////////////////////////////////////
+
 void janus_streaming_incoming_rtcp(janus_plugin_session *handle, int video, char *buf, int len) {
 	if(handle == NULL || g_atomic_int_get(&handle->stopped) || g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
 		return;
@@ -4026,96 +4134,7 @@ void janus_streaming_incoming_rtcp(janus_plugin_session *handle, int video, char
 	// add kimi TODO... for remb proc.... temp disable
 	if(video) {
 		if (source->simulcast && mp->_is_simulcast_threshold_bitrate_setting) {
-			uint64_t bw = janus_rtcp_get_remb(buf, len);
-			uint64_t orign_bw = bw;	// for debuging
-			if(bw > 0) {
-				gboolean bchange = FALSE; 
-				uint32_t substream = session->sim_context.substream;
-
-				session->_simulcast_abr_ctx._remb_bitrate = bw;
-				if(session->_simulcast_abr_ctx._prev_remb_bitrate != 0) {
-					if(!session->_simulcast_abr_ctx._stream_changed_waiting_count) {
-						if(bw < session->_simulcast_abr_ctx._prev_remb_bitrate) {
-							session->_simulcast_abr_ctx._prev_state = session->_simulcast_abr_ctx._state;
-							session->_simulcast_abr_ctx._state = _REMB_BITRATE_DECREASE_STATE;
-							session->_simulcast_abr_ctx._hold_state_count = 0;
-						} else {
-							if((bw - session->_simulcast_abr_ctx._prev_remb_bitrate) <=  __SIMULCAST_ABR_BITRATE_TOLERANCE__) {
-								if(session->_simulcast_abr_ctx._state != _REMB_BITRATE_HOLD_STATE) {
-									session->_simulcast_abr_ctx._prev_state = session->_simulcast_abr_ctx._state;
-									session->_simulcast_abr_ctx._state = _REMB_BITRATE_HOLD_STATE;
-								}
-								
-								if(session->_simulcast_abr_ctx._prev_state == _REMB_BITRATE_DECREASE_STATE) {
-									if(substream == 0) {
-										if(session->_simulcast_abr_ctx._hold_state_count < __SIMULCAST_ABR_GOOGLE_CC_SLOW_START_MAX_THRESHOLD__)
-											session->_simulcast_abr_ctx._hold_state_count++;
-
-										if(session->_simulcast_abr_ctx._hold_state_count >= (__SIMULCAST_ABR_GOOGLE_CC_SLOW_START_DETECT_COUNT_THRESHOLD__ - session->_simulcast_abr_ctx._slow_start_overcome_count*5)) {
-											// detect google cc slow start...
-											if(session->_simulcast_abr_ctx._slow_start_overcome_count < 3)
-												session->_simulcast_abr_ctx._slow_start_overcome_count++;
-
-											uint32_t weight = __SIMULCAST_ABR_GOOGLE_CC_SLOW_START_WEIGHT__;
-											if (mp->_simaulcast_threshold_bitrate[0] > 1000000)
-												weight = weight * 2;
-
-											bw += session->_simulcast_abr_ctx._hold_state_count * weight;	
-										}
-									}
-								}
-							} else {
-								session->_simulcast_abr_ctx._prev_state = session->_simulcast_abr_ctx._state;
-								session->_simulcast_abr_ctx._state = _REMB_BITRATE_INCREASE_STATE;
-								session->_simulcast_abr_ctx._hold_state_count = 0;
-								session->_simulcast_abr_ctx._slow_start_overcome_count = 0;
-							}
-						}
-
-						if(substream == 0) {	// LOW
-							if (bw >= mp->_simaulcast_threshold_bitrate[0] && bw < mp->_simaulcast_threshold_bitrate[1]) {
-								session->sim_context.substream_target = 1;
-								bchange = TRUE;
-							} else if(bw >= mp->_simaulcast_threshold_bitrate[1]) {
-								session->sim_context.substream_target = 2;
-								bchange = TRUE;
-							}
-						} else if(substream == 1) {	// middle
-							if (bw < mp->_simaulcast_threshold_bitrate[0]) {
-								session->sim_context.substream_target = 0;
-								bchange = TRUE;
-							} else if (bw >= mp->_simaulcast_threshold_bitrate[1]) {
-								session->sim_context.substream_target = 2;
-								bchange = TRUE;
-							}
-						} else {	// high
-							if (bw >= mp->_simaulcast_threshold_bitrate[0] && bw < mp->_simaulcast_threshold_bitrate[1]) {
-								session->sim_context.substream_target = 1;
-								bchange = TRUE;
-							} else if (bw < mp->_simaulcast_threshold_bitrate[0]) {
-								session->sim_context.substream_target = 0;
-								bchange = TRUE;
-							}
-						}
-
-						if(bchange == TRUE) {
-							session->_simulcast_abr_ctx._hold_state_count = 0;
-							if(substream == 0 && session->_simulcast_abr_ctx._slow_start_overcome_count != 0) {
-								session->_simulcast_abr_ctx._stream_changed_waiting_count = __SIMULCAST_ABR_STREAM_CHANGED_WAITING__;
-							} else {
-								session->_simulcast_abr_ctx._stream_changed_waiting_count = 5;
-							}
-						}
-					} else {
-						session->_simulcast_abr_ctx._stream_changed_waiting_count--;
-					}
-				}
-
-				session->_simulcast_abr_ctx._prev_remb_bitrate = session->_simulcast_abr_ctx._remb_bitrate;
-
-				JANUS_LOG(LOG_HUGE, "kimi_remb_trace [%p] REMB for this PeerConnection: \t%"SCNu64"\t calc bw\t%"SCNu64"\t \t%"SCNu64"\t substream\t %d\n", 
-						session, orign_bw, bw, janus_get_monotonic_time(), substream);
-			}
+			_janus_streaming_simulcast_video_remb_proc(session, mp, source, buf, len);		// disable  for testing
 		}
 	}
 	/////////////////////////////////////////////////////////////
