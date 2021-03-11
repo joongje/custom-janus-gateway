@@ -6729,7 +6729,7 @@ static void *janus_streaming_filesource_thread(void *data) {
 
 ///////////////////////////////////////////////////////////////////////////////////////
 // add kimi...
-static uint32_t _thresold_bitrate(int32_t width, int32_t height) {
+static uint32_t _threshold_bitrate(int32_t width, int32_t height) {
 	// TODO...
 	uint32_t max_bitrate;
 	if (width*height <= 320 * 180) {
@@ -6888,7 +6888,7 @@ static void _check_h264_video_resolution_bitrate_in_simulcast(janus_streaming_mo
 
 	JANUS_LOG(LOG_INFO, ">>>>>>>> _check_h264_video_resolution_bitrate_in_simulcast vidx %d width %d height %d\n", vidx, width, height);
 
-	mountpoint->_simaulcast_threshold_bitrate[vidx] = _thresold_bitrate(width, height);
+	mountpoint->_simaulcast_threshold_bitrate[vidx] = _threshold_bitrate(width, height);
 
 	if (mountpoint->_simaulcast_threshold_bitrate[0] != 0 &&
 		mountpoint->_simaulcast_threshold_bitrate[1] != 0 &&
